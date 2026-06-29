@@ -1,0 +1,405 @@
+// PetRide – Prisma Schema
+// Models: User, Pet, Driver, Ride, Payment, Rating, Notification, Fare
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────
+
+enum UserRole {
+  CUSTOMER
+  DRIVER
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  PENDING_VERIFICATION
+}
+
+enum PetSize {
+  TINY   // até 3 kg  (hamster, coelho mini)
+  SMALL  // 3–7 kg    (chihuahua, gato)
+  MEDIUM // 7–15 kg   (beagle, cocker)
+  LARGE  // 15–30 kg  (labrador, border collie)
+  GIANT  // >30 kg    (são bernardo, dogue)
+}
+
+enum PetSpecies {
+  DOG
+  CAT
+  BIRD
+  RABBIT
+  RODENT
+  REPTILE
+  OTHER
+}
+
+enum RideStatus {
+  PENDING       // aguardando aceite de motorista
+  ACCEPTED      // motorista aceitou
+  DRIVER_ON_WAY // motorista a caminho do cliente
+  ARRIVED       // motorista chegou
+  IN_PROGRESS   // corrida iniciada
+  COMPLETED     // corrida concluída
+  CANCELLED     // cancelada pelo cliente ou motorista
+  NO_DRIVER     // nenhum motorista disponível
+}
+
+enum RideType {
+  VET          // consulta veterinária
+  GROOMING     // banho e tosa
+  DAYCARE      // creche pet
+  HOTEL        // hotel para pets
+  TRAINING     // adestramento
+  GENERAL      // transporte geral
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  PAID
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum PaymentMethod {
+  PIX
+  CREDIT_CARD
+  DEBIT_CARD
+  BOLETO
+  WALLET
+}
+
+enum NotificationType {
+  RIDE_REQUEST
+  RIDE_ACCEPTED
+  DRIVER_ON_WAY
+  DRIVER_ARRIVED
+  RIDE_STARTED
+  RIDE_COMPLETED
+  RIDE_CANCELLED
+  PAYMENT_CONFIRMED
+  PAYMENT_FAILED
+  RATING_RECEIVED
+  PROMO
+  SYSTEM
+}
+
+enum NotificationChannel {
+  PUSH
+  SMS
+  EMAIL
+  WHATSAPP
+  IN_APP
+}
+
+// ─────────────────────────────────────────────
+// USER
+// ─────────────────────────────────────────────
+
+model User {
+  id                String      @id @default(cuid())
+  name              String
+  email             String      @unique
+  phone             String      @unique
+  passwordHash      String
+  avatarUrl         String?
+  role              UserRole    @default(CUSTOMER)
+  status            UserStatus  @default(PENDING_VERIFICATION)
+  emailVerifiedAt   DateTime?
+  phoneVerifiedAt   DateTime?
+  fcmToken          String?     // Firebase Cloud Messaging token for push notifications
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+  deletedAt         DateTime?   // soft delete
+
+  // Relations
+  pets              Pet[]
+  ridesAsCustomer   Ride[]          @relation("CustomerRides")
+  driver            Driver?
+  payments          Payment[]
+  ratingsGiven      Rating[]        @relation("RatingsGiven")
+  ratingsReceived   Rating[]        @relation("RatingsReceived")
+  notifications     Notification[]
+  wallet            Wallet?
+
+  @@index([email])
+  @@index([phone])
+  @@index([status])
+  @@map("users")
+}
+
+// ─────────────────────────────────────────────
+// DRIVER (profile linked to a User)
+// ─────────────────────────────────────────────
+
+model Driver {
+  id                  String    @id @default(cuid())
+  userId              String    @unique
+  user                User      @relation(fields: [userId], references: [id])
+  licenseNumber       String    @unique
+  licenseExpiry       DateTime
+  vehicleModel        String
+  vehiclePlate        String    @unique
+  vehicleYear         Int
+  vehicleColor        String
+  hasCarrier          Boolean   @default(false)  // tem caixa de transporte
+  maxPetSize          PetSize   @default(MEDIUM)
+  acceptedSpecies     PetSpecies[]
+  isOnline            Boolean   @default(false)
+  currentLatitude     Float?
+  currentLongitude    Float?
+  currentHeading      Float?    // grau de direção
+  rating              Float     @default(0)
+  totalRides          Int       @default(0)
+  approvedAt          DateTime?
+  suspendedAt         DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  // Relations
+  rides               Ride[]
+
+  @@index([isOnline])
+  @@index([vehiclePlate])
+  @@map("drivers")
+}
+
+// ─────────────────────────────────────────────
+// PET
+// ─────────────────────────────────────────────
+
+model Pet {
+  id              String      @id @default(cuid())
+  ownerId         String
+  owner           User        @relation(fields: [ownerId], references: [id])
+  name            String
+  species         PetSpecies
+  breed           String?
+  size            PetSize
+  weightKg        Float?
+  birthDate       DateTime?
+  colorDescription String?
+  photoUrl        String?
+  microchipNumber String?     @unique
+  isVaccinated    Boolean     @default(false)
+  vaccinationCard String?     // URL do documento/foto
+  healthNotes     String?     // condições especiais, alergias, medicamentos
+  isActive        Boolean     @default(true)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // Relations
+  rides           Ride[]
+
+  @@index([ownerId])
+  @@index([species, size])
+  @@map("pets")
+}
+
+// ─────────────────────────────────────────────
+// RIDE
+// ─────────────────────────────────────────────
+
+model Ride {
+  id                    String      @id @default(cuid())
+  customerId            String
+  customer              User        @relation("CustomerRides", fields: [customerId], references: [id])
+  driverId              String?
+  driver                Driver?     @relation(fields: [driverId], references: [id])
+  petId                 String
+  pet                   Pet         @relation(fields: [petId], references: [id])
+  fareId                String?
+  fare                  Fare?       @relation(fields: [fareId], references: [id])
+
+  // Ride metadata
+  type                  RideType    @default(GENERAL)
+  status                RideStatus  @default(PENDING)
+  notes                 String?     // instruções especiais do cliente
+
+  // Pickup
+  pickupAddress         String
+  pickupLatitude        Float
+  pickupLongitude       Float
+  pickupAt              DateTime?
+
+  // Destination
+  destinationAddress    String
+  destinationLatitude   Float
+  destinationLongitude  Float
+  destinationName       String?     // ex: "Clínica Vet Amigo"
+
+  // Tracking
+  distanceKm            Float?
+  durationMinutes       Int?
+  routePolyline         String?     // encoded polyline
+
+  // Timeline
+  acceptedAt            DateTime?
+  driverOnWayAt         DateTime?
+  arrivedAt             DateTime?
+  startedAt             DateTime?
+  completedAt           DateTime?
+  cancelledAt           DateTime?
+  cancelReason          String?
+  cancelledBy           String?     // userId
+
+  // Pricing
+  estimatedPriceBrl     Float?
+  finalPriceBrl         Float?
+
+  createdAt             DateTime    @default(now())
+  updatedAt             DateTime    @updatedAt
+
+  // Relations
+  payment               Payment?
+  rating                Rating?
+
+  @@index([customerId, status])
+  @@index([driverId, status])
+  @@index([status])
+  @@index([createdAt])
+  @@map("rides")
+}
+
+// ─────────────────────────────────────────────
+// FARE (tabela de preços por zona/tipo)
+// ─────────────────────────────────────────────
+
+model Fare {
+  id                String     @id @default(cuid())
+  name              String     // ex: "Padrão", "Premium", "Urgência"
+  rideType          RideType
+  basePriceBrl      Float      // taxa de abertura
+  pricePerKmBrl     Float      // por km rodado
+  pricePerMinBrl    Float      // por minuto de espera
+  minimumPriceBrl   Float      // preço mínimo
+  surgeMultiplier   Float      @default(1.0)  // multiplicador de demanda
+  petSizeExtra      Json       // { "LARGE": 5.0, "GIANT": 10.0 }
+  isActive          Boolean    @default(true)
+  validFrom         DateTime   @default(now())
+  validUntil        DateTime?
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  // Relations
+  rides             Ride[]
+
+  @@index([rideType, isActive])
+  @@map("fares")
+}
+
+// ─────────────────────────────────────────────
+// PAYMENT
+// ─────────────────────────────────────────────
+
+model Payment {
+  id                    String          @id @default(cuid())
+  rideId                String          @unique
+  ride                  Ride            @relation(fields: [rideId], references: [id])
+  userId                String
+  user                  User            @relation(fields: [userId], references: [id])
+
+  method                PaymentMethod
+  status                PaymentStatus   @default(PENDING)
+  amountBrl             Float
+  taxAmountBrl          Float           @default(0)
+  driverShareBrl        Float           // valor repassado ao motorista
+  platformFeeBrl        Float           // comissão da plataforma
+
+  // Gateway
+  gatewayProvider       String?         // ex: "mercadopago", "stripe"
+  gatewayPaymentId      String?         @unique
+  gatewayPixCode        String?         // copia-e-cola Pix
+  gatewayPixQrCode      String?         // base64 QR code Pix
+  gatewayBoletoUrl      String?
+  gatewayBoletoBarcode  String?
+
+  paidAt                DateTime?
+  refundedAt            DateTime?
+  refundAmountBrl       Float?
+  refundReason          String?
+
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+
+  @@index([userId, status])
+  @@index([gatewayPaymentId])
+  @@map("payments")
+}
+
+// ─────────────────────────────────────────────
+// WALLET (saldo interno do motorista)
+// ─────────────────────────────────────────────
+
+model Wallet {
+  id            String    @id @default(cuid())
+  userId        String    @unique
+  user          User      @relation(fields: [userId], references: [id])
+  balanceBrl    Float     @default(0)
+  totalEarned   Float     @default(0)
+  totalWithdrawn Float    @default(0)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@map("wallets")
+}
+
+// ─────────────────────────────────────────────
+// RATING
+// ─────────────────────────────────────────────
+
+model Rating {
+  id            String    @id @default(cuid())
+  rideId        String    @unique
+  ride          Ride      @relation(fields: [rideId], references: [id])
+  fromUserId    String
+  fromUser      User      @relation("RatingsGiven",    fields: [fromUserId], references: [id])
+  toUserId      String
+  toUser        User      @relation("RatingsReceived", fields: [toUserId],   references: [id])
+
+  score         Int       // 1–5
+  comment       String?
+  tags          String[]  // ex: ["Pontual", "Cuidadoso com o pet", "Carro limpo"]
+
+  createdAt     DateTime  @default(now())
+
+  @@index([toUserId])
+  @@index([fromUserId])
+  @@map("ratings")
+}
+
+// ─────────────────────────────────────────────
+// NOTIFICATION
+// ─────────────────────────────────────────────
+
+model Notification {
+  id          String                @id @default(cuid())
+  userId      String
+  user        User                  @relation(fields: [userId], references: [id])
+  type        NotificationType
+  channel     NotificationChannel   @default(PUSH)
+  title       String
+  body        String
+  data        Json?                 // payload extra (ex: { rideId: "...", driverId: "..." })
+  isRead      Boolean               @default(false)
+  readAt      DateTime?
+  sentAt      DateTime?
+  createdAt   DateTime              @default(now())
+
+  @@index([userId, isRead])
+  @@index([userId, createdAt])
+  @@map("notifications")
+}
